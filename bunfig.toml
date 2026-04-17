@@ -1,0 +1,8 @@
+[install]
+exact = false
+
+[test]
+root = "tests"
+
+[alias]
+"react-devtools-core" = "./src/stubs/react-devtools-core.ts"
