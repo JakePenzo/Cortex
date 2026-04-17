@@ -23,14 +23,15 @@ const BANNER_LINES = [
   `                                                             `,
 ];
 
-const BANNER_ROWS = BANNER_LINES.length;
+const BANNER_ROWS  = BANNER_LINES.length;
 const BANNER_WIDTH = Math.max(...BANNER_LINES.map(l => l.length));
 
 // ── Gradient: violet → cyan → emerald ─────────────────────
 const STOPS: Array<[number, [number, number, number]]> = [
-  [0.00, [168,  85, 247]],
-  [0.45, [ 34, 211, 238]],
-  [1.00, [ 52, 211, 153]],
+  [0.00, [255,  30,  60]],   // deep red
+  [0.35, [255, 100,  20]],   // orange
+  [0.65, [255, 200,  40]],   // amber
+  [1.00, [220,  80,  20]],   // burnt orange
 ];
 
 function gradientHex(t: number): string {
@@ -47,22 +48,84 @@ function gradientHex(t: number): string {
   return `#${r.toString(16).padStart(2,"0")}${g.toString(16).padStart(2,"0")}${b.toString(16).padStart(2,"0")}`;
 }
 
-// ── Render one animation frame ─────────────────────────────
-function renderFrame(scanPos: number): string[] {
-  return BANNER_LINES.map(row => {
+// ── Glitch substitution pools ──────────────────────────────
+// Each char maps to alternates it can flicker between.
+// Original char appears multiple times to weight toward it.
+const GLITCH: Record<string, string> = {
+  "#": "#*@&#%#",
+  ":": ":;|!:",
+  ".": ".,..",
+  ",": ",.,",
+  ";": ";:;",
+  "!": "!|;!",
+  "t": "t7+tt",
+  "f": "f4ff",
+  "i": "i1|ii",
+  "j": "j!jj",
+  "W": "WMWW",
+  "E": "E3FEE",
+  "G": "G6CGG",
+  "K": "KXkKK",
+  "L": "L1|LL",
+  "D": "D0ODD",
+  "j": "j!jj",
+  "e": "e3ee",
+};
+
+// Pre-compute all glitch-eligible positions
+const GLITCH_POOL: Array<[row: number, col: number]> = [];
+for (let r = 0; r < BANNER_LINES.length; r++) {
+  for (let c = 0; c < BANNER_LINES[r].length; c++) {
+    if (GLITCH[BANNER_LINES[r][c]]) GLITCH_POOL.push([r, c]);
+  }
+}
+
+function pickGlitches(n: number): Set<string> {
+  const set = new Set<string>();
+  for (let i = 0; i < n * 4 && set.size < n; i++) {
+    const [r, c] = GLITCH_POOL[Math.floor(Math.random() * GLITCH_POOL.length)];
+    set.add(`${r},${c}`);
+  }
+  return set;
+}
+
+// ── Render banner frame ────────────────────────────────────
+function renderBanner(opts: {
+  scanPos?: number;     // scan sweep head (intro only)
+  glitches?: Set<string>;
+}): string[] {
+  const { scanPos = Infinity, glitches = new Set() } = opts;
+
+  return BANNER_LINES.map((row, rowIdx) => {
     const padded = row.padEnd(BANNER_WIDTH);
     let out = "";
     for (let col = 0; col < BANNER_WIDTH; col++) {
-      const ch = padded[col] ?? " ";
+      let ch = padded[col] ?? " ";
+
+      // Apply glitch substitution
+      const key = `${rowIdx},${col}`;
+      if (glitches.has(key) && GLITCH[ch]) {
+        const pool = GLITCH[ch];
+        ch = pool[Math.floor(Math.random() * pool.length)];
+      }
+
       if (ch === " ") { out += " "; continue; }
+
+      // Scan sweep coloring
       if (col > scanPos) {
         out += chalk.hex("#0d1b1b")(ch);
-      } else {
+      } else if (scanPos !== Infinity) {
         const behind = scanPos - col;
-        if (behind <= 1)  out += chalk.whiteBright(ch);
-        else if (behind <= 3) out += chalk.hex("#c8fff8")(ch);
-        else if (behind <= 6) out += chalk.hex("#55e8d8")(ch);
-        else out += chalk.hex(gradientHex(col / (BANNER_WIDTH - 1)))(ch);
+        if (behind <= 1)      out += chalk.whiteBright(ch);
+        else if (behind <= 3) out += chalk.hex("#fff0c0")(ch);
+        else if (behind <= 6) out += chalk.hex("#ffb050")(ch);
+        else                  out += chalk.hex(gradientHex(col / (BANNER_WIDTH - 1)))(ch);
+      } else {
+        // Steady state: gradient + glitch highlight
+        const color = glitches.has(key)
+          ? "#ffe8c0"
+          : gradientHex(col / (BANNER_WIDTH - 1));
+        out += chalk.hex(color)(ch);
       }
     }
     return out;
@@ -71,25 +134,52 @@ function renderFrame(scanPos: number): string[] {
 
 function sleep(ms: number) { return new Promise<void>(r => setTimeout(r, ms)); }
 
-// ── Animate the banner ─────────────────────────────────────
-async function animateBanner(indent: string): Promise<void> {
+// ── One-time scan sweep ────────────────────────────────────
+async function runSweep(indent: string): Promise<void> {
   const isTTY = process.stdout.isTTY;
   const FRAMES = 28;
-  const DELAY  = 28; // ~780ms total sweep
+  const DELAY  = 28;
 
-  const initial = renderFrame(-4);
-  for (const row of initial) process.stdout.write(indent + row + "\n");
-
+  for (const row of renderBanner({ scanPos: -4 })) process.stdout.write(indent + row + "\n");
   if (!isTTY) return;
 
   for (let f = 1; f <= FRAMES; f++) {
     const scanPos = Math.round((f / FRAMES) * (BANNER_WIDTH + 10)) - 5;
     process.stdout.write(`\x1b[${BANNER_ROWS}A`);
-    for (const row of renderFrame(scanPos)) {
-      process.stdout.write(indent + row + "\n");
-    }
+    for (const row of renderBanner({ scanPos })) process.stdout.write(indent + row + "\n");
     await sleep(DELAY);
   }
+}
+
+// ── Continuous idle flicker ────────────────────────────────
+async function runFlicker(indent: string, linesBelow: number): Promise<void> {
+  if (!process.stdout.isTTY) return;
+
+  let alive = true;
+  const timer = setTimeout(() => { alive = false; }, 30_000);
+
+  try {
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.once("data", () => { alive = false; });
+  } catch { /* not a TTY stdin */ }
+
+  while (alive) {
+    await sleep(90 + Math.random() * 60); // 90–150ms between ticks
+    if (!alive) break;
+
+    // Burst occasionally: many glitches, or near-zero
+    const burst = Math.random() < 0.15;
+    const count = burst ? 8 + Math.floor(Math.random() * 6) : Math.floor(Math.random() * 4);
+    const glitches = count > 0 ? pickGlitches(count) : new Set<string>();
+
+    process.stdout.write(`\x1b[${linesBelow + BANNER_ROWS}A`);
+    for (const row of renderBanner({ glitches })) process.stdout.write(indent + row + "\n");
+    if (linesBelow > 0) process.stdout.write(`\x1b[${linesBelow}B`);
+  }
+
+  clearTimeout(timer);
+  try { process.stdin.setRawMode(false); process.stdin.pause(); } catch { /* ok */ }
 }
 
 // ── Main intro ─────────────────────────────────────────────
@@ -105,74 +195,75 @@ export async function runIntro(): Promise<void> {
 
   const onlineCount   = backendStats.filter(b => b.available).length;
   const totalMemories = backendStats.reduce((s, b) => s + b.total_memories, 0);
+  const indent        = "  ";
 
-  const indent = "  ";
   console.log();
-  await animateBanner(indent);
+  await runSweep(indent);
 
-  // Subtitle centred under banner
+  // Print content below banner; track line count for flicker cursor management
+  let linesBelow = 0;
+  const pl = (s = "") => { console.log(s); linesBelow++; };
+
   const subtitle = "Memory Router for AI Tools";
   const subPad   = Math.floor((BANNER_WIDTH - subtitle.length) / 2);
-  console.log(indent + " ".repeat(subPad) + chalk.dim(subtitle));
-  console.log();
+  pl(indent + " ".repeat(subPad) + chalk.dim(subtitle));
+  pl();
 
-  // Stats card
   const cardWidth     = 60;
   const backendsLabel = backends.length === 0 ? "none set up" : `${onlineCount} / ${backends.length}`;
-
   printCard(indent, cardWidth, [
     { label: totalMemories.toLocaleString(), sub: "memories" },
     { label: backendsLabel,                  sub: "backends" },
     { label: String(dayStats.queries),       sub: "queries"  },
     { label: dayStats.avg_latency_ms > 0 ? dayStats.avg_latency_ms + "ms" : "—", sub: "latency" },
-  ]);
+  ], linesBelow);
+  linesBelow += 4; // card is always 4 lines
 
-  // Backend dots
   if (backends.length > 0) {
-    console.log();
+    pl();
     const dots = backendStats.map(b => {
-      const dot = b.available ? chalk.hex("#4dd9c0")("●") : chalk.dim("○");
+      const dot = b.available ? chalk.hex("#ff6428")("●") : chalk.dim("○");
       return dot + " " + chalk.dim(b.name);
     }).join(chalk.dim("  ·  "));
-    console.log(indent + "  " + dots);
+    pl(indent + "  " + dots);
   }
 
-  // Recent memories
   if (recentMems.length > 0) {
-    console.log();
+    pl();
     for (const m of recentMems) {
-      const type    = chalk.dim(`[${m.type}]`.padEnd(12));
-      const content = chalk.white(trunc(m.content, 54));
-      console.log(indent + "  " + type + " " + content);
+      pl(indent + "  " + chalk.dim(`[${m.type}]`.padEnd(12)) + " " + chalk.white(trunc(m.content, 54)));
     }
   }
 
-  // Footer
-  console.log();
-  console.log(
+  pl();
+  pl(
     indent + chalk.dim("  run ") +
-    chalk.hex("#4dd9c0")("cortex help") +
+    chalk.hex("#ff6428")("cortex help") +
     chalk.dim(" for all commands  ·  ") +
-    chalk.hex("#4dd9c0")("cortex dash") +
+    chalk.hex("#ff6428")("cortex dash") +
     chalk.dim(" for live dashboard")
   );
-  console.log();
+  pl(indent + chalk.dim("  press any key to exit"));
+  pl();
+
+  await runFlicker(indent, linesBelow);
+
+  // Erase "press any key" hint on exit
+  process.stdout.write(`\x1b[${linesBelow}A`);
+  for (let i = 0; i < linesBelow; i++) process.stdout.write("\x1b[2K\n");
+  process.stdout.write(`\x1b[${linesBelow}A`);
+  process.stdout.write("\n");
 }
 
 // ── Helpers ────────────────────────────────────────────────
 interface Stat { label: string; sub: string }
 
-function printCard(indent: string, cardWidth: number, stats: Stat[]): void {
+function printCard(indent: string, cardWidth: number, stats: Stat[], _startLine: number): void {
   const border = chalk.dim("─".repeat(cardWidth));
   const colW   = Math.floor(cardWidth / stats.length);
-
-  const pad = (s: string, w: number) => {
-    const plain = s.replace(/\x1B\[[0-9;]*m/g, "");
-    return s + " ".repeat(Math.max(0, w - plain.length));
-  };
-
+  const pad    = (s: string, w: number) => s + " ".repeat(Math.max(0, w - s.replace(/\x1B\[[0-9;]*m/g, "").length));
   console.log(indent + chalk.dim("┌") + border + chalk.dim("┐"));
-  console.log(indent + chalk.dim("│") + stats.map(s => pad(chalk.hex("#4dd9c0").bold(s.label), colW)).join("") + chalk.dim("│"));
+  console.log(indent + chalk.dim("│") + stats.map(s => pad(chalk.hex("#ff6428").bold(s.label), colW)).join("") + chalk.dim("│"));
   console.log(indent + chalk.dim("│") + stats.map(s => pad(chalk.dim(s.sub), colW)).join("") + chalk.dim("│"));
   console.log(indent + chalk.dim("└") + border + chalk.dim("┘"));
 }
