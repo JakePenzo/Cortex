@@ -452,18 +452,16 @@ function buildVisNode(m) {
   const color = TYPE_COLORS[m.type] || '#7d8590';
   const sup   = m.status === 'superseded';
   const short = truncate(m.title || m.content || '', 55);
-  // Rich HTML tooltip shown on hover
-  const tip   = \`<div style="max-width:240px;font-family:monospace;font-size:12px;line-height:1.5;padding:2px">
-    <span style="color:\${color};font-size:10px;text-transform:uppercase;letter-spacing:1px">\${m.type || ''}</span>
-    \${sup ? \`<span style="color:var(--muted);font-size:10px;margin-left:6px">superseded</span>\` : ''}
-    <div style="color:#e6edf3;margin-top:5px">\${escHtml(short)}</div>
-    \${(m.tags||[]).length ? \`<div style="color:#7d8590;margin-top:4px;font-size:10px">\${(m.tags||[]).slice(0,4).join(' · ')}</div>\` : ''}
-    <div style="color:#555e6e;margin-top:4px;font-size:10px">click to inspect</div>
-  </div>\`;
+  // vis.js renders string titles as plain text — must pass a DOM element for HTML tooltips
+  const tip = document.createElement('div');
+  tip.style.cssText = 'max-width:240px;font-family:monospace;font-size:12px;line-height:1.5;padding:6px 8px;background:#161b22;border:1px solid #30363d;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.4)';
+  tip.innerHTML = \`<span style="color:\${color};font-size:10px;text-transform:uppercase;letter-spacing:1px">\${m.type || ''}</span>\${sup ? \` <span style="color:#7d8590;font-size:10px">· superseded</span>\` : ''}
+<div style="color:#e6edf3;margin-top:6px;font-size:12px">\${escHtml(short)}</div>\${(m.tags||[]).length ? \`<div style="color:#7d8590;margin-top:5px;font-size:10px">\${(m.tags||[]).slice(0,4).join(' · ')}</div>\` : ''}
+<div style="color:#404858;margin-top:5px;font-size:10px">click to inspect</div>\`;
   return {
     id: m.id,
     label: '',   // No permanent labels — keeps the graph clean
-    title: tip,
+    title: tip,  // DOM element renders as styled HTML
     color: {
       background: sup ? 'rgba(125,133,144,.10)' : hexAlpha(color, 0.16),
       border:     sup ? '#2a3040' : color,
