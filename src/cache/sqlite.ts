@@ -62,6 +62,10 @@ function migrate(d: Database): void {
     d.exec("ALTER TABLE memories ADD COLUMN status TEXT DEFAULT 'active'");
   if (!existing.has("supersedes_id"))
     d.exec("ALTER TABLE memories ADD COLUMN supersedes_id TEXT");
+  if (!existing.has("cluster"))
+    d.exec("ALTER TABLE memories ADD COLUMN cluster TEXT");
+  if (!existing.has("ai_tags"))
+    d.exec("ALTER TABLE memories ADD COLUMN ai_tags TEXT");
 
   // Now safe to create indexes that reference the new columns
   d.exec(`
@@ -202,6 +206,21 @@ function rowToMemory(row: any): MemoryResult {
     tags: row.tags ? JSON.parse(row.tags) : undefined,
     source: row.source ?? undefined,
   };
+}
+
+// ── AI Analysis ──────────────────────────────────────────────
+
+export function updateMemoryAnalysis(id: string, cluster: string, aiTags: string[]): void {
+  db().query(
+    "UPDATE memories SET cluster = ?, ai_tags = ? WHERE id = ?"
+  ).run(cluster, JSON.stringify(aiTags), id);
+}
+
+export function getMemoriesNeedingAnalysis(): MemoryResult[] {
+  const rows = db().query(
+    "SELECT * FROM memories WHERE ai_tags IS NULL ORDER BY created_at DESC"
+  ).all() as any[];
+  return rows.map(rowToMemory);
 }
 
 export function closeDb(): void {

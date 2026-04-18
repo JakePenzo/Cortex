@@ -6,6 +6,13 @@
  */
 import { test, expect, type Page, type ConsoleMessage } from "@playwright/test";
 
+// Dismiss the first-visit onboarding overlay so it never blocks clicks
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("cortex-onboarded", "1");
+  });
+});
+
 // ── Helpers ───────────────────────────────────────────────────
 async function collectErrors(page: Page): Promise<string[]> {
   const errors: string[] = [];

@@ -5,7 +5,10 @@ import {
   getTodayStats, getRecentMemories, getAllMemories,
   getMemoryById, overrideMemory, updateMemoryContent,
   deleteMemoryFromIndex, indexMemory, getMemoryCount,
+  updateMemoryAnalysis, getMemoriesNeedingAnalysis,
 } from "../../cache/sqlite.js";
+import { isOllamaAvailable, listModels } from "../../backends/ollama/client.js";
+import { analyzeMemory, pickModel } from "../../backends/ollama/analyzer.js";
 import { html } from "./html.js";
 import type { MemoryResult } from "../../router/types.js";
 
@@ -47,6 +50,23 @@ export function buildApp(backends: BackendAdapter[]) {
       project: body.project,
     };
     indexMemory(mem);
+
+    // Fire-and-forget background analysis — never blocks the response
+    const allForAnalysis = getAllMemories().filter(m => m.id !== mem.id);
+    analyzeMemory(
+      { id: mem.id, content: mem.content, type: mem.type },
+      allForAnalysis.map(m => ({
+        id: m.id,
+        content: m.content,
+        type: m.type,
+        tags: m.tags ?? [],
+      }))
+    ).then(result => {
+      if (result) {
+        updateMemoryAnalysis(mem.id, result.cluster, result.tags);
+      }
+    }).catch(() => { /* analysis is optional — ignore all errors */ });
+
     return c.json({ memory: getMemoryById(mem.id) }, 201);
   });
 
@@ -129,6 +149,46 @@ export function buildApp(backends: BackendAdapter[]) {
     }
 
     return c.json({ nodes, edges });
+  });
+
+  // ── Ollama ────────────────────────────────────────────────
+  app.get("/api/ollama/status", async c => {
+    const available = await isOllamaAvailable();
+    const model = available ? await pickModel() : null;
+    const total   = getAllMemories().length;
+    const pending = getMemoriesNeedingAnalysis().length;
+    const analyzed = total - pending;
+    return c.json({ available, model, analyzed, pending });
+  });
+
+  app.post("/api/ollama/analyze", async c => {
+    const pending = getMemoriesNeedingAnalysis().slice(0, 20);
+    const existing = getAllMemories();
+
+    let analyzed = 0;
+    let skipped  = 0;
+    let errors   = 0;
+
+    for (const mem of pending) {
+      try {
+        const result = await analyzeMemory(
+          { id: mem.id, content: mem.content, type: mem.type },
+          existing
+            .filter(m => m.id !== mem.id)
+            .map(m => ({ id: m.id, content: m.content, type: m.type, tags: m.tags ?? [] }))
+        );
+        if (result) {
+          updateMemoryAnalysis(mem.id, result.cluster, result.tags);
+          analyzed++;
+        } else {
+          skipped++;
+        }
+      } catch {
+        errors++;
+      }
+    }
+
+    return c.json({ analyzed, skipped, errors });
   });
 
   return app;
