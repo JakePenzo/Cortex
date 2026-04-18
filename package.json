@@ -8,8 +8,11 @@
   "scripts": {
     "dev": "bun --watch src/index.ts",
     "build": "bun build src/index.ts --compile --outfile dist/cortex",
-    "test": "bun test",
-    "test:ci": "bun test --coverage"
+    "test": "bun test tests/e2e tests/router",
+    "test:ci": "bun test tests/e2e tests/router --coverage",
+    "test:browser": "npx playwright test",
+    "test:browser:ui": "npx playwright test --ui",
+    "test:all": "bun run test:ci && bun run test:browser"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
@@ -25,8 +28,9 @@
     "zod": "^3.22.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/react": "^18.2.0",
-    "typescript": "^5.3.3",
-    "bun-types": "latest"
+    "bun-types": "latest",
+    "typescript": "^5.3.3"
   }
 }

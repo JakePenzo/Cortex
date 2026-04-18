@@ -2,7 +2,8 @@
 exact = false
 
 [test]
-root = "tests"
+# Explicit dirs keep bun away from tests/browser/ (those are Playwright-only)
+root = "."
 coverageReporter = ["text"]
 coverageThreshold = 0.80
 
