@@ -355,21 +355,19 @@ function drawHalo(ctx, positions, color, scale) {
     ctx.arc(b.x, b.y, pad * 0.6, ang - Math.PI/2, ang + Math.PI/2);
     ctx.closePath();
   } else {
-    // Smooth bezier blob through the hull
+    // Smooth closed blob: start at midpoint of last→first so every segment
+    // is a quadratic bezier from mid(prev,cur) to mid(cur,nxt) with cur as control point.
     const n = expanded.length;
+    ctx.moveTo(
+      (expanded[n-1].x + expanded[0].x) / 2,
+      (expanded[n-1].y + expanded[0].y) / 2
+    );
     for (let i = 0; i < n; i++) {
       const cur = expanded[i];
       const nxt = expanded[(i + 1) % n];
-      const mid = { x: (cur.x + nxt.x) / 2, y: (cur.y + nxt.y) / 2 };
-      if (i === 0) ctx.moveTo(mid.x, mid.y);
-      else         ctx.quadraticCurveTo(cur.x, cur.y, mid.x, mid.y);
+      ctx.quadraticCurveTo(cur.x, cur.y, (cur.x + nxt.x) / 2, (cur.y + nxt.y) / 2);
     }
-    // Close: last midpoint → first midpoint
-    const last  = expanded[n - 1];
-    const first = expanded[0];
-    const nxt   = expanded[1 % n];
-    ctx.quadraticCurveTo(last.x, last.y, (last.x + first.x) / 2, (last.y + first.y) / 2);
-    ctx.quadraticCurveTo(first.x, first.y, (first.x + nxt.x) / 2, (first.y + nxt.y) / 2);
+    ctx.closePath();
   }
 
   ctx.fillStyle   = hexAlpha(color, 0.055);
@@ -920,12 +918,16 @@ function init3DGraph() {
     .nodeLabel('name')
     .nodeColor('color')
     .nodeOpacity(0.9)
-    .nodeRelSize(4)
-    .linkColor(l => l.label === 'overrides' ? '#ff6428' : '#2a3040')
-    .linkOpacity(0.5)
+    .nodeRelSize(5)
+    .linkColor(l => l.label === 'overrides' ? '#ff6428' : '#30363d')
+    .linkOpacity(0.6)
     .linkWidth(l => l.label === 'overrides' ? 2 : 1)
     .backgroundColor('#0d1117')
+    .warmupTicks(120)          // pre-run physics so nodes are spread on first frame
+    .cooldownTicks(400)
+    .onEngineStop(() => { if (graph3d) graph3d.zoomToFit(600, 80); })
     .onNodeClick(n => { selectMemory(n.id); showTab('detail'); })
+    .onNodeHover(n => { document.body.style.cursor = n ? 'pointer' : 'default'; })
     .width(w)
     .height(h);
 }
