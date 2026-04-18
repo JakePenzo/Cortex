@@ -183,7 +183,15 @@ async function runFlicker(indent: string, linesBelow: number): Promise<void> {
 }
 
 // ── Main intro ─────────────────────────────────────────────
+const HIDE_CURSOR = "\x1b[?25l";
+const SHOW_CURSOR = "\x1b[?25h";
+
 export async function runIntro(): Promise<void> {
+  process.stdout.write(HIDE_CURSOR);
+  const restoreCursor = () => process.stdout.write(SHOW_CURSOR);
+  process.on("exit", restoreCursor);
+  process.on("SIGINT", () => { restoreCursor(); process.exit(0); });
+
   const config   = loadConfig();
   const backends = createBackends(config);
 
@@ -247,12 +255,7 @@ export async function runIntro(): Promise<void> {
   pl();
 
   await runFlicker(indent, linesBelow);
-
-  // Erase "press any key" hint on exit
-  process.stdout.write(`\x1b[${linesBelow}A`);
-  for (let i = 0; i < linesBelow; i++) process.stdout.write("\x1b[2K\n");
-  process.stdout.write(`\x1b[${linesBelow}A`);
-  process.stdout.write("\n");
+  restoreCursor();
 }
 
 // ── Helpers ────────────────────────────────────────────────
