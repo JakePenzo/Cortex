@@ -3,6 +3,8 @@ exact = false
 
 [test]
 root = "tests"
+coverageReporter = ["text"]
+coverageThreshold = 0.80
 
 [alias]
 "react-devtools-core" = "./src/stubs/react-devtools-core.ts"

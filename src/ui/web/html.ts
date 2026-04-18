@@ -66,8 +66,8 @@ header h1 { color: var(--accent); font-size: 16px; font-weight: 700; letter-spac
 .center-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .graph-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
 .graph-toolbar span { color: var(--muted); font-size: 11px; }
-#graph-container { flex: 1; background: var(--bg); position: relative; }
-#graph-canvas { width: 100%; height: 100%; }
+#graph-container { flex: 1; background: var(--bg); position: relative; overflow: hidden; }
+#graph-canvas { width: 100%; height: 100%; overflow: hidden; }
 .graph-hint { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); color: var(--muted); font-size: 11px; pointer-events: none; background: rgba(13,17,23,.8); padding: 4px 10px; border-radius: 12px; border: 1px solid var(--border); }
 
 /* ── Right panel: detail / memory list ── */
@@ -272,51 +272,82 @@ function initGraph() {
   });
 }
 
+// Stable hash for a node — used to skip no-op updates
+function nodeHash(m) {
+  return [m.id, m.status, m.type, (m.title||m.content||'').slice(0,60)].join('|');
+}
+
+function buildVisNode(m) {
+  const color = TYPE_COLORS[m.type] || '#7d8590';
+  const sup   = m.status === 'superseded';
+  return {
+    id: m.id,
+    label: m.label || truncate(m.title || m.content || '', 28),
+    title: m.title || m.content,
+    color: {
+      background: sup ? 'rgba(125,133,144,.12)' : hexAlpha(color, 0.18),
+      border:     sup ? '#30363d' : color,
+      highlight: { background: hexAlpha(color, 0.35), border: '#ff6428' },
+      hover:     { background: hexAlpha(color, 0.28), border: color },
+    },
+    size:    sup ? 8 : 13,
+    opacity: sup ? 0.4 : 1,
+    font: { color: sup ? '#555' : '#e6edf3' },
+  };
+}
+
 function rebuildGraph(memories) {
-  const visible = memories.filter(m =>
+  const visible    = memories.filter(m =>
     activeFilters.has(m.type) && (showSuperseded || m.status === 'active')
   );
   const visibleIds = new Set(visible.map(m => m.id));
 
-  const nodes = visible.map(m => ({
-    id: m.id,
-    label: m.label || truncate(m.content || '', 28),
-    title: m.title || m.content,
-    color: {
-      background: m.status === 'superseded'
-        ? 'rgba(125,133,144,.2)'
-        : hexAlpha(TYPE_COLORS[m.type] || '#7d8590', 0.18),
-      border: m.status === 'superseded'
-        ? '#30363d'
-        : TYPE_COLORS[m.type] || '#7d8590',
-      highlight: { background: hexAlpha(TYPE_COLORS[m.type] || '#7d8590', 0.35), border: '#ff6428' },
-      hover:     { background: hexAlpha(TYPE_COLORS[m.type] || '#7d8590', 0.28), border: TYPE_COLORS[m.type] || '#7d8590' },
-    },
-    size: m.status === 'superseded' ? 8 : 13,
-    opacity: m.status === 'superseded' ? 0.45 : 1,
-    font: { color: m.status === 'superseded' ? '#7d8590' : '#e6edf3' },
-  }));
+  // ── Diff nodes ──────────────────────────────────────────
+  const existingIds  = new Set(graphData.nodes.getIds());
+  const toAdd        = [];
+  const toUpdate     = [];
+  const toRemoveIds  = [...existingIds].filter(id => !visibleIds.has(id));
 
-  // Only include edges where both endpoints are visible
-  const allEdges = (window._graphEdges || []).filter(e =>
-    visibleIds.has(e.from) && visibleIds.has(e.to)
-  );
+  for (const m of visible) {
+    const vnode = buildVisNode(m);
+    const hash  = nodeHash(m);
+    if (!existingIds.has(m.id)) {
+      toAdd.push(vnode);
+      window._nodeHashes = window._nodeHashes || {};
+      window._nodeHashes[m.id] = hash;
+    } else {
+      const prev = window._nodeHashes?.[m.id];
+      if (prev !== hash) {
+        toUpdate.push(vnode);
+        window._nodeHashes[m.id] = hash;
+      }
+    }
+  }
 
-  graphData.nodes.clear();
-  graphData.edges.clear();
-  graphData.nodes.add(nodes);
-  graphData.edges.add(allEdges.map((e, i) => ({
-    id: 'e' + i,
-    from: e.from,
-    to: e.to,
-    dashes: e.dashes,
-    label: e.label || '',
-    color: e.label === 'overrides'
-      ? { color: '#ff6428', highlight: '#ff6428' }
-      : { color: '#30363d' },
-  })));
+  // ── Diff edges ──────────────────────────────────────────
+  const newEdges = (window._graphEdges || [])
+    .filter(e => visibleIds.has(e.from) && visibleIds.has(e.to))
+    .map((e, i) => ({
+      id: 'e' + i,
+      from: e.from, to: e.to,
+      dashes: e.dashes,
+      label: e.label || '',
+      color: e.label === 'overrides' ? { color: '#ff6428', highlight: '#ff6428' } : { color: '#30363d' },
+    }));
+  const edgeHash = newEdges.map(e => e.from + e.to + e.label).join(',');
+  const edgesChanged = edgeHash !== window._lastEdgeHash;
+  window._lastEdgeHash = edgeHash;
 
-  network.setOptions({ physics: { enabled: true, stabilization: { iterations: 80 } } });
+  // Apply only what changed
+  if (toRemoveIds.length) graphData.nodes.remove(toRemoveIds);
+  if (toAdd.length)       graphData.nodes.add(toAdd);
+  if (toUpdate.length)    graphData.nodes.update(toUpdate);
+  if (edgesChanged) { graphData.edges.clear(); graphData.edges.add(newEdges); }
+
+  // Only kick physics when nodes were actually added
+  if (toAdd.length > 0) {
+    network.setOptions({ physics: { enabled: true, stabilization: { iterations: 60 } } });
+  }
 }
 
 // ── Data loading ──────────────────────────────────────────────
@@ -599,6 +630,14 @@ function hexAlpha(hex, a) {
 }
 
 // ── Boot ──────────────────────────────────────────────────────
+// Suppress the spurious ResizeObserver loop browser warning —
+// vis.js triggers it during physics; it's noise, not a real error.
+const _roErr = window.onerror;
+window.onerror = (msg, ...rest) => {
+  if (typeof msg === 'string' && msg.includes('ResizeObserver')) return true;
+  return _roErr ? _roErr(msg, ...rest) : false;
+};
+
 initGraph();
 refresh();
 setInterval(refresh, 5000);

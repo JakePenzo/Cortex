@@ -208,3 +208,12 @@ export function closeDb(): void {
   _db?.close();
   _db = null;
 }
+
+/** Reset the DB singleton — used in tests to get a fresh DB per temp dir. */
+export function resetDb(): void {
+  _db?.close();
+  _db = null;
+}
+
+// Expose reset hook for e2e test isolation
+(globalThis as any).__cortexDbReset = resetDb;

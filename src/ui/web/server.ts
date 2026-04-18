@@ -9,7 +9,8 @@ import {
 import { html } from "./html.js";
 import type { MemoryResult } from "../../router/types.js";
 
-export async function startWebDashboard(backends: BackendAdapter[], port: number): Promise<void> {
+/** Build the Hono app (no port binding) — exported for testing. */
+export function buildApp(backends: BackendAdapter[]) {
   const app = new Hono();
   app.use("/*", cors());
 
@@ -46,7 +47,7 @@ export async function startWebDashboard(backends: BackendAdapter[], port: number
       project: body.project,
     };
     indexMemory(mem);
-    return c.json({ memory: mem }, 201);
+    return c.json({ memory: getMemoryById(mem.id) }, 201);
   });
 
   app.put("/api/memories/:id", async c => {
@@ -129,6 +130,11 @@ export async function startWebDashboard(backends: BackendAdapter[], port: number
     return c.json({ nodes, edges });
   });
 
+  return app;
+}
+
+export async function startWebDashboard(backends: BackendAdapter[], port: number): Promise<void> {
+  const app = buildApp(backends);
   Bun.serve({ port, fetch: app.fetch });
 }
 
