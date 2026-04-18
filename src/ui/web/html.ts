@@ -844,14 +844,20 @@ async function toggle3D() {
   if (is3D) {
     canvas2d.style.display = 'none';
     canvas3d.style.display = '';
+    canvas3d.innerHTML = \`<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:12px;gap:8px">
+      <span style="animation:pulse 1s infinite">◉</span> Loading 3D renderer…
+    </div>\`;
     hint.textContent = 'Click node to inspect · Drag to rotate · Scroll to zoom · Right-drag to pan';
     try {
       await load3DLib();
+      // Wait for layout cycle so the container has real pixel dimensions
+      await new Promise(r => requestAnimationFrame(r));
+      await new Promise(r => requestAnimationFrame(r));
       init3DGraph();
     } catch (e) {
       console.error('3D graph unavailable:', e);
-      canvas3d.innerHTML = \`<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:12px">
-        Could not load 3D renderer. Check your internet connection.
+      canvas3d.innerHTML = \`<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--red);font-size:12px">
+        Could not load 3D renderer. Check your internet connection.<br><small style="color:var(--muted)">\${e.message}</small>
       </div>\`;
     }
   } else {
@@ -866,6 +872,11 @@ async function toggle3D() {
 function init3DGraph() {
   const container = document.getElementById('graph-3d');
   container.innerHTML = '';
+
+  // Use parent dimensions (graph-container) as the 3D canvas size
+  const parent = document.getElementById('graph-container');
+  const w = parent.offsetWidth  || window.innerWidth  - 210 - 400;
+  const h = parent.offsetHeight || window.innerHeight - 44;
 
   const nodes3d = allMemories
     .filter(m => activeFilters.has(m.type) && (showSuperseded || m.status === 'active'))
@@ -892,8 +903,8 @@ function init3DGraph() {
     .linkWidth(l => l.label === 'overrides' ? 2 : 1)
     .backgroundColor('#0d1117')
     .onNodeClick(n => { selectMemory(n.id); showTab('detail'); })
-    .width(container.offsetWidth || 800)
-    .height(container.offsetHeight || 600);
+    .width(w)
+    .height(h);
 }
 
 function sync3DData() {
