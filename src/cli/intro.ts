@@ -1,7 +1,7 @@
 import chalk from "chalk";
 import { createBackends } from "../backends/factory.js";
 import { loadConfig } from "../config/loader.js";
-import { getTodayStats, getRecentMemories } from "../cache/sqlite.js";
+import { getTodayStats, getRecentMemories, getMemoryCount } from "../cache/sqlite.js";
 
 // ── ASCII banner ───────────────────────────────────────────
 const BANNER_LINES = [
@@ -202,7 +202,8 @@ export async function runIntro(): Promise<void> {
   ]);
 
   const onlineCount   = backendStats.filter(b => b.available).length;
-  const totalMemories = backendStats.reduce((s, b) => s + b.total_memories, 0);
+  // Local SQLite index is the source of truth — includes seeded + synced memories
+  const totalMemories = getMemoryCount();
   const indent        = "  ";
 
   console.log();
