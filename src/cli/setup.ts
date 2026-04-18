@@ -14,7 +14,7 @@ const HIDE = "\x1b[?25l";
 const SHOW = "\x1b[?25h";
 const ACCENT = "#ff6428";
 
-function ok(msg: string)   { console.log(`    ${chalk.hex(ACCENT)("✓")}  ${msg}`); }
+function ok(msg: string)   { console.log(`    ${chalk.greenBright("✓")}  ${msg}`); }
 function fail(msg: string) { console.log(`    ${chalk.dim("✗")}  ${chalk.dim(msg)}`); }
 function info(msg: string) { console.log(`    ${chalk.dim("·")}  ${chalk.dim(msg)}`); }
 function blank()           { console.log(); }
@@ -298,7 +298,7 @@ export async function runSetup(): Promise<void> {
   blank();
   hr();
   blank();
-  console.log("  " + chalk.hex(ACCENT)("✓") + "  " + chalk.white("Cortex is ready!"));
+  console.log("  " + chalk.greenBright("✓") + "  " + chalk.white("Cortex is ready!"));
   blank();
   console.log(chalk.dim("  Your AI tools will now use shared memory automatically."));
   console.log(chalk.dim("  Try it:"));
