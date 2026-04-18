@@ -147,6 +147,19 @@ header h1 { color: var(--accent); font-size: 16px; font-weight: 700; letter-spac
 
 /* AI badge */
 .ai-badge { font-size: 9px; color: #56d364; background: rgba(86,211,100,.1); border: 1px solid rgba(86,211,100,.2); padding: 1px 5px; border-radius: 3px; letter-spacing: 0.5px; }
+
+/* Override vis.js tooltip wrapper — remove the default white box */
+div.vis-tooltip {
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  color: inherit !important;
+  font-family: inherit !important;
+  font-size: inherit !important;
+  pointer-events: none !important;
+}
 </style>
 </head>
 <body>
@@ -454,7 +467,7 @@ function buildVisNode(m) {
   const short = truncate(m.title || m.content || '', 55);
   // vis.js renders string titles as plain text — must pass a DOM element for HTML tooltips
   const tip = document.createElement('div');
-  tip.style.cssText = 'max-width:240px;font-family:monospace;font-size:12px;line-height:1.5;padding:6px 8px;background:#161b22;border:1px solid #30363d;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.4)';
+  tip.style.cssText = 'max-width:240px;font-family:monospace;font-size:12px;line-height:1.5;padding:8px 10px;background:#161b22;border:1px solid #30363d;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.6);color:#e6edf3';
   tip.innerHTML = \`<span style="color:\${color};font-size:10px;text-transform:uppercase;letter-spacing:1px">\${m.type || ''}</span>\${sup ? \` <span style="color:#7d8590;font-size:10px">· superseded</span>\` : ''}
 <div style="color:#e6edf3;margin-top:6px;font-size:12px">\${escHtml(short)}</div>\${(m.tags||[]).length ? \`<div style="color:#7d8590;margin-top:5px;font-size:10px">\${(m.tags||[]).slice(0,4).join(' · ')}</div>\` : ''}
 <div style="color:#404858;margin-top:5px;font-size:10px">click to inspect</div>\`;
@@ -822,11 +835,18 @@ function renderBackends(backends) {
 // ── 3D graph ─────────────────────────────────────────────────
 function load3DLib() {
   return new Promise((resolve, reject) => {
-    if (window.ForceGraph3D) { resolve(); return; }
+    if (typeof ForceGraph3D !== 'undefined') { resolve(); return; }
     const s = document.createElement('script');
-    s.src = 'https://unpkg.com/3d-force-graph@1/dist/3d-force-graph.min.js';
-    s.onload  = resolve;
-    s.onerror = () => reject(new Error('Failed to load 3d-force-graph'));
+    // jsdelivr is more reliable than unpkg for production traffic
+    s.src = 'https://cdn.jsdelivr.net/npm/3d-force-graph@1.80.0/dist/3d-force-graph.min.js';
+    s.onload = () => {
+      if (typeof ForceGraph3D === 'undefined') {
+        reject(new Error('3d-force-graph loaded but ForceGraph3D global not found'));
+      } else {
+        resolve();
+      }
+    };
+    s.onerror = () => reject(new Error('Script failed to load from CDN'));
     document.head.appendChild(s);
   });
 }
@@ -850,14 +870,17 @@ async function toggle3D() {
     hint.textContent = 'Click node to inspect · Drag to rotate · Scroll to zoom · Right-drag to pan';
     try {
       await load3DLib();
-      // Wait for layout cycle so the container has real pixel dimensions
+      // Two rAF cycles — let the browser compute layout so offsetWidth/Height are real
       await new Promise(r => requestAnimationFrame(r));
       await new Promise(r => requestAnimationFrame(r));
       init3DGraph();
     } catch (e) {
-      console.error('3D graph unavailable:', e);
-      canvas3d.innerHTML = \`<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--red);font-size:12px">
-        Could not load 3D renderer. Check your internet connection.<br><small style="color:var(--muted)">\${e.message}</small>
+      console.error('[Cortex 3D]', e);
+      canvas3d.innerHTML = \`<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:8px">
+        <div style="color:var(--red);font-size:13px">3D renderer failed to load</div>
+        <div style="color:var(--muted);font-size:11px;max-width:320px;text-align:center">\${escHtml(String(e?.message || e))}</div>
+        <div style="color:var(--muted);font-size:11px">Requires an internet connection to load the WebGL library.</div>
+        <button class="btn" onclick="toggle3D()" style="margin-top:4px">Back to 2D</button>
       </div>\`;
     }
   } else {
