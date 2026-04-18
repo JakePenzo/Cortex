@@ -89,7 +89,8 @@ export function buildApp(backends: BackendAdapter[]) {
       id: m.id,
       label: trunc(m.content, 35),
       title: m.content,
-      group: m.type,
+      type: m.type,   // used by frontend filter logic
+      group: m.type,  // used by vis.js group styling
       status: m.status,
       tags: m.tags ?? [],
       project: m.project ?? null,

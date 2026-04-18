@@ -366,6 +366,9 @@ async function loadGraph() {
   window._graphEdges = edges;
   window._graphNodes = nodes;
 
+  // API sends { group } for vis.js; normalise to { type } that our filters expect
+  for (const n of nodes) { n.type = n.type ?? n.group; }
+
   // Merge graph node metadata into allMemories lookup
   allMemories = nodes;
   window._memById = {};
