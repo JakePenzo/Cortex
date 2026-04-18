@@ -32,18 +32,19 @@ async function confirm(question: string, def = false): Promise<boolean> {
 }
 
 function hr(label?: string): void {
-  const base = "─".repeat(52);
-  if (!label) { console.log("  " + chalk.dim(base)); return; }
+  if (!label) { console.log("  " + chalk.dim("─".repeat(52))); return; }
   const side = Math.max(0, 52 - label.length - 4);
   console.log("  " + chalk.dim("── " + label + " " + "─".repeat(side)));
 }
 
+function step(msg: string): void {
+  console.log("       " + chalk.dim(msg));
+}
+
 // ── Tool detection ──────────────────────────────────────────
 async function which(cmd: string): Promise<string | null> {
-  try {
-    const { stdout } = await exec("which", [cmd]);
-    return stdout.trim() || null;
-  } catch { return null; }
+  try { const { stdout } = await exec("which", [cmd]); return stdout.trim() || null; }
+  catch { return null; }
 }
 
 async function binVersion(cmd: string, args = ["--version"]): Promise<string | null> {
@@ -54,10 +55,8 @@ async function binVersion(cmd: string, args = ["--version"]): Promise<string | n
 }
 
 async function checkUrl(url: string): Promise<boolean> {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
-    return res.ok;
-  } catch { return false; }
+  try { const r = await fetch(url, { signal: AbortSignal.timeout(3000) }); return r.ok; }
+  catch { return false; }
 }
 
 async function detectPkgManager(): Promise<"bun" | "npm" | "pnpm" | null> {
@@ -67,27 +66,26 @@ async function detectPkgManager(): Promise<"bun" | "npm" | "pnpm" | null> {
   return null;
 }
 
-function runLive(cmd: string, args: string[]): Promise<boolean> {
+// Run a command with output piped directly to terminal.
+// Spinner must be stopped before calling this.
+function runLive(cmd: string, args: string[], cwd?: string): Promise<boolean> {
   return new Promise(resolve => {
-    const proc = spawn(cmd, args, { stdio: ["ignore", "inherit", "inherit"] });
+    const proc = spawn(cmd, args, { stdio: ["ignore", "inherit", "inherit"], cwd });
     proc.on("close", code => resolve(code === 0));
     proc.on("error", () => resolve(false));
   });
 }
 
-// ── OpenMemory Docker compose ───────────────────────────────
-const OPENMEMORY_COMPOSE = `services:
-  openmemory:
-    image: mem0ai/openmemory-mcp
-    container_name: cortex_openmemory
-    ports:
-      - "8765:8765"
-    restart: unless-stopped
-    volumes:
-      - openmemory_data:/app/data
-volumes:
-  openmemory_data:
-`;
+// Run a command silently, return combined output string.
+async function runSilent(cmd: string, args: string[], cwd?: string): Promise<{ ok: boolean; out: string }> {
+  try {
+    const { stdout, stderr } = await exec(cmd, args, { timeout: 30_000, cwd } as Parameters<typeof exec>[2]);
+    return { ok: true, out: (stdout + stderr).trim() };
+  } catch (e: unknown) {
+    const err = e as { stdout?: string; stderr?: string };
+    return { ok: false, out: ((err.stdout ?? "") + (err.stderr ?? "")).trim() };
+  }
+}
 
 // ── Setup ───────────────────────────────────────────────────
 export async function runSetup(): Promise<void> {
@@ -108,21 +106,24 @@ export async function runSetup(): Promise<void> {
   console.log(chalk.dim("  Detecting environment..."));
   console.log();
 
-  const [pkgManager, dockerPath, dockerVersion, qmdPath, qmdVersion, openMemUp] = await Promise.all([
+  const [pkgManager, dockerPath, dockerVersion, gitPath, qmdPath, qmdVersion, openMemUp] = await Promise.all([
     detectPkgManager(),
     which("docker"),
     binVersion("docker", ["--version"]),
+    which("git"),
     which("qmd"),
     binVersion("qmd"),
     checkUrl("http://localhost:8765/health"),
   ]);
 
   const dockerOk = !!dockerPath;
-  const envRows: Array<[string, boolean, string]> = [
-    [pkgManager ?? "node pkg manager", !!pkgManager, pkgManager ?? "not found — install npm, bun, or pnpm"],
-    ["docker", dockerOk, dockerVersion?.replace("Docker version ", "").split(",")[0] ?? "not found"],
-  ];
-  for (const [name, ok, info] of envRows) {
+  const gitOk    = !!gitPath;
+
+  for (const [name, ok, info] of [
+    [pkgManager ?? "pkg manager", !!pkgManager, pkgManager ?? "not found — install npm, bun, or pnpm"],
+    ["docker",  dockerOk, dockerVersion?.replace("Docker version ", "").split(",")[0] ?? "not found"],
+    ["git",     gitOk,    gitOk ? "found" : "not found — required for OpenMemory"],
+  ] as Array<[string, boolean, string]>) {
     const icon = ok ? chalk.hex("#ff6428")("✓") : chalk.dim("✗");
     console.log(`    ${icon}  ${chalk.white(name.padEnd(14))}  ${chalk.dim(info)}`);
   }
@@ -139,20 +140,20 @@ export async function runSetup(): Promise<void> {
   if (qmdOk) {
     config.backends.qmd.enabled = true;
   } else if (!pkgManager) {
-    console.log(chalk.dim("       install npm/bun/pnpm first, then: npm install -g @tobilu/qmd"));
+    step("install npm/bun/pnpm first, then: npm install -g @tobilu/qmd");
   } else {
     const go = await confirm(`Install QMD via ${pkgManager}?`);
     if (go) {
-      process.stdout.write(SHOW);
-      const spin = ora({ text: "Installing @tobilu/qmd...", color: "yellow" }).start();
+      console.log();
+      restore();  // show cursor while streaming output
       const ok = await runLive(pkgManager, ["install", "-g", "@tobilu/qmd"]);
-      spin.stop();
       process.stdout.write(HIDE);
+      console.log();
       if (ok) {
         printBackend("QMD", true, "installed");
         config.backends.qmd.enabled = true;
       } else {
-        console.log(chalk.red(`    ✗  QMD install failed`) + chalk.dim("  →  npm install -g @tobilu/qmd"));
+        printBackend("QMD", false, "install failed  →  npm install -g @tobilu/qmd");
       }
     }
   }
@@ -164,12 +165,14 @@ export async function runSetup(): Promise<void> {
   if (openMemUp) {
     config.backends.openmemory.enabled = true;
   } else if (!dockerOk) {
-    console.log(chalk.dim("       Docker is required — https://docs.docker.com/get-docker/"));
+    step("Docker required — https://docs.docker.com/get-docker/");
+  } else if (!gitOk) {
+    step("git required to clone OpenMemory source");
   } else {
-    const go = await confirm("Start OpenMemory with Docker?");
+    const go = await confirm("Set up OpenMemory with Docker?");
     if (go) {
-      process.stdout.write(SHOW);
-      await startOpenMemory(config);
+      restore();
+      await setupOpenMemory(config);
       process.stdout.write(HIDE);
     }
   }
@@ -188,10 +191,7 @@ export async function runSetup(): Promise<void> {
     { name: "Windsurf",       path: join(homedir(), ".codeium", "windsurf", "mcp_config.json"),                                kind: "mcp" as const },
   ];
 
-  for (const client of clients) {
-    configureClient(client.name, client.path, client.kind);
-  }
-
+  for (const client of clients) configureClient(client.name, client.path, client.kind);
   console.log();
 
   // ── 4. Daemon ──────────────────────────────────────────────
@@ -212,72 +212,88 @@ export async function runSetup(): Promise<void> {
   console.log();
   hr();
   console.log();
-  console.log("  " + chalk.hex("#ff6428")("✓") + "  Done.  " + chalk.dim("Run `cortex status` to verify backends.\n"));
+  console.log("  " + chalk.hex("#ff6428")("✓") + "  Done.  " + chalk.dim("Run `cortex status` to verify.\n"));
   restore();
 }
 
-// ── Start OpenMemory with Docker compose ────────────────────
-async function startOpenMemory(config: ReturnType<typeof loadConfig>): Promise<void> {
-  const dir = join(homedir(), ".cortex", "openmemory");
-  mkdirSync(dir, { recursive: true });
-  const composePath = join(dir, "docker-compose.yml");
-  writeFileSync(composePath, OPENMEMORY_COMPOSE);
+// ── OpenMemory: sparse-clone mem0ai/mem0, build + run ───────
+async function setupOpenMemory(config: ReturnType<typeof loadConfig>): Promise<void> {
+  const srcDir      = join(homedir(), ".cortex", "openmemory-src");
+  const composeDir  = join(srcDir, "openmemory");
+  const composePath = join(composeDir, "docker-compose.yml");
 
   console.log();
-  const spin = ora({ text: "Pulling image and starting OpenMemory...", color: "yellow" }).start();
-  const ok = await runLive("docker", ["compose", "-f", composePath, "up", "-d", "--pull", "missing"]);
-  spin.stop();
 
-  if (!ok) {
-    console.log(chalk.red("    ✗  docker compose failed"));
-    console.log(chalk.dim(`       compose file saved to: ${composePath.replace(homedir(), "~")}`));
-    console.log(chalk.dim(`       try manually: docker compose -f ${composePath} up -d`));
+  // Clone or update
+  if (!existsSync(srcDir)) {
+    step("Cloning mem0ai/mem0 (sparse, openmemory/ only)...");
+    const cloned = await runLive("git", [
+      "clone", "--depth", "1", "--filter=blob:none", "--sparse",
+      "https://github.com/mem0ai/mem0", srcDir,
+    ]);
+    if (!cloned) {
+      step("git clone failed — check your internet connection");
+      return;
+    }
+    await runSilent("git", ["sparse-checkout", "set", "openmemory"], srcDir);
+  } else {
+    step("Pulling latest mem0ai/mem0...");
+    await runSilent("git", ["pull", "--depth", "1"], srcDir);
+  }
+
+  if (!existsSync(composePath)) {
+    step(`docker-compose.yml not found at ${composeDir}`);
+    step("Check https://github.com/mem0ai/mem0/tree/main/openmemory");
     return;
   }
 
-  const wait = ora({ text: "Waiting for OpenMemory health check...", color: "yellow" }).start();
+  step("Building and starting OpenMemory (first run may take a few minutes)...");
+  const ok = await runLive("docker", ["compose", "-f", composePath, "up", "-d", "--build"]);
+
+  if (!ok) {
+    step("docker compose failed — check output above");
+    step(`compose file: ${composePath.replace(homedir(), "~")}`);
+    return;
+  }
+
+  // Wait for health
+  const spin = ora({ text: "Waiting for OpenMemory to be ready...", color: "yellow" }).start();
   let ready = false;
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 30; i++) {
     await new Promise(r => setTimeout(r, 1000));
     if (await checkUrl("http://localhost:8765/health")) { ready = true; break; }
   }
-  wait.stop();
+  spin.stop();
 
   if (ready) {
     printBackend("OpenMemory", true, "running at :8765");
     config.backends.openmemory.enabled = true;
   } else {
-    console.log(chalk.yellow("    ~  container started but health check timed out — may still be initializing"));
-    console.log(chalk.dim(`       check: docker logs cortex_openmemory`));
+    console.log(chalk.yellow("    ~  started but health check timed out (may still be initializing)"));
+    step("check: docker logs $(docker compose -f " + composePath + " ps -q)");
   }
 }
 
 // ── Configure MCP client ────────────────────────────────────
 function configureClient(name: string, configPath: string, kind: "mcp" | "settings"): void {
   const dir = configPath.substring(0, configPath.lastIndexOf("/"));
-
   if (!existsSync(dir)) {
     console.log(`    ${chalk.dim("○")}  ${chalk.dim(name.padEnd(16))}  ${chalk.dim("not installed")}`);
     return;
   }
-
   try {
-    const cortexEntry = { command: "cortex", args: ["mcp"] };
+    const entry = { command: "cortex", args: ["mcp"] };
     let existing: Record<string, unknown> = {};
-    if (existsSync(configPath)) {
-      try { existing = JSON.parse(readFileSync(configPath, "utf-8")); } catch {}
-    }
-
+    if (existsSync(configPath)) { try { existing = JSON.parse(readFileSync(configPath, "utf-8")); } catch {} }
     if (kind === "settings") {
       const s = existing as { mcpServers?: Record<string, unknown> };
-      s.mcpServers = { ...(s.mcpServers ?? {}), cortex: cortexEntry };
+      s.mcpServers = { ...(s.mcpServers ?? {}), cortex: entry };
       writeFileSync(configPath, JSON.stringify(s, null, 2));
     } else {
       const m = existing as { mcpServers?: Record<string, unknown> };
-      m.mcpServers = { ...(m.mcpServers ?? {}), cortex: cortexEntry };
+      m.mcpServers = { ...(m.mcpServers ?? {}), cortex: entry };
       writeFileSync(configPath, JSON.stringify(m, null, 2));
     }
-
     console.log(`    ${chalk.hex("#ff6428")("✓")}  ${chalk.white(name.padEnd(16))}  ${chalk.dim(configPath.replace(homedir(), "~"))}`);
   } catch (e) {
     console.log(`    ${chalk.yellow("~")}  ${chalk.dim(name.padEnd(16))}  write failed: ${chalk.dim(String(e))}`);
