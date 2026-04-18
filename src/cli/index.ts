@@ -6,6 +6,8 @@ import { runAdd } from "./add.js";
 import { runInit } from "./init.js";
 import { runDoctor } from "./doctor.js";
 import { runConfig } from "./config.js";
+import { runSeed } from "./seed.js";
+import { runWipe } from "./wipe.js";
 import { startMcpServer } from "../mcp/server.js";
 import { startHttpMcpServer } from "../mcp/transport/http.js";
 import { createBackends } from "../backends/factory.js";
@@ -22,6 +24,12 @@ export async function run(argv: string[]): Promise<void> {
   switch (command) {
     case "setup":
       return runSetup();
+
+    case "seed":
+      return runSeed();
+
+    case "wipe":
+      return runWipe();
 
     case "status":
       return runStatus(rest.includes("--watch"));

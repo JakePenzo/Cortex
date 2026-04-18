@@ -43,20 +43,37 @@ function migrate(d: Database): void {
       tags TEXT,
       source TEXT,
       score REAL DEFAULT 0,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      status TEXT DEFAULT 'active',
+      supersedes_id TEXT
     );
 
     CREATE INDEX IF NOT EXISTS memories_created_at ON memories(created_at);
     CREATE INDEX IF NOT EXISTS memories_backend ON memories(backend);
     CREATE INDEX IF NOT EXISTS memories_type ON memories(type);
   `);
+
+  // Non-destructive column additions for existing DBs — must run BEFORE
+  // any query that references these columns (including index creation).
+  const existing = new Set(
+    (d.query("PRAGMA table_info(memories)").all() as Array<{ name: string }>).map(r => r.name)
+  );
+  if (!existing.has("status"))
+    d.exec("ALTER TABLE memories ADD COLUMN status TEXT DEFAULT 'active'");
+  if (!existing.has("supersedes_id"))
+    d.exec("ALTER TABLE memories ADD COLUMN supersedes_id TEXT");
+
+  // Now safe to create indexes that reference the new columns
+  d.exec(`
+    CREATE INDEX IF NOT EXISTS memories_status ON memories(status);
+  `);
 }
 
+// ── Cache ────────────────────────────────────────────────────
 export function getCached(hash: string): MemoryResult[] | null {
   const row = db().query(
     "SELECT results FROM query_cache WHERE hash = ? AND expires_at > ?"
   ).get(hash, Date.now()) as { results: string } | null;
-
   return row ? JSON.parse(row.results) : null;
 }
 
@@ -71,6 +88,7 @@ export function invalidateCache(): void {
   db().query("DELETE FROM query_cache WHERE expires_at <= ?").run(Date.now());
 }
 
+// ── Stats ────────────────────────────────────────────────────
 export function recordStat(type: "query" | "write", backend: string, latency_ms: number): void {
   db().query(
     "INSERT INTO stats (type, backend, latency_ms, created_at) VALUES (?, ?, ?, ?)"
@@ -94,9 +112,9 @@ export function getTodayStats(): DayStats {
     "SELECT type, backend, latency_ms FROM stats WHERE created_at >= ?"
   ).all(ts) as { type: string; backend: string; latency_ms: number }[];
 
-  const queries = rows.filter(r => r.type === "query").length;
-  const writes = rows.filter(r => r.type === "write").length;
-  const avg = rows.length ? Math.round(rows.reduce((s, r) => s + r.latency_ms, 0) / rows.length) : 0;
+  const queries  = rows.filter(r => r.type === "query").length;
+  const writes   = rows.filter(r => r.type === "write").length;
+  const avg      = rows.length ? Math.round(rows.reduce((s, r) => s + r.latency_ms, 0) / rows.length) : 0;
   const backends = [...new Set(rows.map(r => r.backend))];
 
   const cacheRow = db().query(
@@ -106,10 +124,12 @@ export function getTodayStats(): DayStats {
   return { queries, writes, cache_hits: cacheRow.c, avg_latency_ms: avg, backends_used: backends };
 }
 
-export function indexMemory(result: MemoryResult): void {
+// ── Memory index ─────────────────────────────────────────────
+export function indexMemory(result: MemoryResult & { status?: string; supersedes_id?: string }): void {
   db().query(`
-    INSERT OR REPLACE INTO memories (id, content, type, backend, project, tags, source, score, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT OR REPLACE INTO memories
+      (id, content, type, backend, project, tags, source, score, created_at, status, supersedes_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     result.id,
     result.content,
@@ -120,6 +140,8 @@ export function indexMemory(result: MemoryResult): void {
     result.source ?? null,
     result.score,
     result.created_at.getTime(),
+    result.status ?? "active",
+    result.supersedes_id ?? null,
   );
 }
 
@@ -127,12 +149,45 @@ export function getRecentMemories(limit = 10): MemoryResult[] {
   const rows = db().query(
     "SELECT * FROM memories ORDER BY created_at DESC LIMIT ?"
   ).all(limit) as any[];
-
   return rows.map(rowToMemory);
+}
+
+export function getAllMemories(): Array<MemoryResult & { status: string; supersedes_id: string | null }> {
+  const rows = db().query(
+    "SELECT * FROM memories ORDER BY created_at DESC"
+  ).all() as any[];
+  return rows.map(r => ({ ...rowToMemory(r), status: r.status ?? "active", supersedes_id: r.supersedes_id ?? null }));
+}
+
+export function getMemoryById(id: string): (MemoryResult & { status: string; supersedes_id: string | null }) | null {
+  const row = db().query("SELECT * FROM memories WHERE id = ?").get(id) as any | null;
+  if (!row) return null;
+  return { ...rowToMemory(row), status: row.status ?? "active", supersedes_id: row.supersedes_id ?? null };
+}
+
+export function overrideMemory(oldId: string, newMemory: MemoryResult): void {
+  // Mark old as superseded
+  db().query("UPDATE memories SET status = 'superseded' WHERE id = ?").run(oldId);
+  // Index new memory pointing back to old
+  indexMemory({ ...newMemory, status: "active", supersedes_id: oldId });
+}
+
+export function updateMemoryContent(id: string, content: string): void {
+  db().query("UPDATE memories SET content = ? WHERE id = ?").run(content, id);
 }
 
 export function deleteMemoryFromIndex(id: string): void {
   db().query("DELETE FROM memories WHERE id = ?").run(id);
+}
+
+export function wipeAllMemories(): number {
+  const count = (db().query("SELECT COUNT(*) as c FROM memories").get() as { c: number }).c;
+  db().exec("DELETE FROM memories; DELETE FROM query_cache; DELETE FROM stats;");
+  return count;
+}
+
+export function getMemoryCount(): number {
+  return (db().query("SELECT COUNT(*) as c FROM memories WHERE status = 'active'").get() as { c: number }).c;
 }
 
 function rowToMemory(row: any): MemoryResult {
