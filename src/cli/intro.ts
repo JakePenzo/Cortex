@@ -212,9 +212,14 @@ export async function runIntro(): Promise<void> {
   let linesBelow = 0;
   const pl = (s = "") => { console.log(s); linesBelow++; };
 
-  const subtitle = "Memory Router for AI Tools";
-  const subPad   = Math.floor((BANNER_WIDTH - subtitle.length) / 2);
-  pl(indent + " ".repeat(subPad) + chalk.dim(subtitle));
+  const descLines = [
+    "A memory layer for AI tools. Connects Claude, Cursor, and others",
+    "to shared memory so they remember your preferences and decisions.",
+  ];
+  for (const line of descLines) {
+    const pad = Math.floor((BANNER_WIDTH - line.length) / 2);
+    pl(indent + " ".repeat(Math.max(0, pad)) + chalk.dim(line));
+  }
   pl();
 
   const cardWidth     = 60;
