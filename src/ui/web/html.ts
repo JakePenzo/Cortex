@@ -861,7 +861,7 @@ async function toggle3D() {
 
   if (is3D) {
     canvas2d.style.display = 'none';
-    canvas3d.style.display = '';
+    canvas3d.style.display = 'block';
     canvas3d.innerHTML = \`<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--muted);font-size:12px;gap:8px">
       <span style="animation:pulse 1s infinite">◉</span> Loading 3D renderer…
     </div>\`;

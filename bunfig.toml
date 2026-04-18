@@ -2,7 +2,7 @@
 exact = false
 
 [test]
-# Explicit dirs keep bun away from tests/browser/ (those are Playwright-only)
+# Browser tests use *.browser.ts extension — bun only auto-discovers *.test.ts / *.spec.ts
 root = "."
 coverageReporter = ["text"]
 coverageThreshold = 0.80

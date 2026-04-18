@@ -2,6 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "tests/browser",
+  testMatch: "**/*.browser.ts",
   timeout: 30_000,
   retries: 0,
   workers: 1, // serial — one server shared across tests
