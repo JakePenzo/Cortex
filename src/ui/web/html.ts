@@ -67,9 +67,10 @@ header h1 { color: var(--accent); font-size: 16px; font-weight: 700; letter-spac
 .graph-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
 .graph-toolbar span { color: var(--muted); font-size: 11px; }
 #graph-container { flex: 1; background: var(--bg); position: relative; overflow: hidden; }
-/* NO percentage sizing here — JS sets explicit pixel dimensions to prevent
-   vis.js from triggering ResizeObserver loops (critical for Safari). */
-#graph-canvas { position: absolute; top: 0; left: 0; overflow: hidden; }
+/* position:absolute takes the canvas out of flow so vis.js's own
+   ResizeObserver can resize it without affecting the parent's layout —
+   that's what breaks the feedback loop in Safari. */
+#graph-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; }
 .graph-hint { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); color: var(--muted); font-size: 11px; pointer-events: none; background: rgba(13,17,23,.8); padding: 4px 10px; border-radius: 12px; border: 1px solid var(--border); }
 
 /* ── Right panel: detail / memory list ── */
@@ -219,25 +220,8 @@ let graphData     = { nodes: new vis.DataSet(), edges: new vis.DataSet() };
 // ── Vis.js network ────────────────────────────────────────────
 function initGraph() {
   const container = document.getElementById('graph-canvas');
-  const parent    = document.getElementById('graph-container');
-
-  // Give vis.js explicit pixel dimensions upfront. Percentage-based sizing
-  // causes vis.js's internal ResizeObserver to fire in a loop — especially
-  // bad in Safari which enforces stricter ResizeObserver loop detection.
-  function syncSize() {
-    const r = parent.getBoundingClientRect();
-    if (r.width === 0 || r.height === 0) return;
-    container.style.width  = r.width  + 'px';
-    container.style.height = r.height + 'px';
-    if (network) {
-      network.setSize(r.width + 'px', r.height + 'px');
-      network.redraw();
-    }
-  }
-  syncSize();
 
   const options = {
-    autoResize: false, // we manage resizing — vis.js must NOT install its own ResizeObserver
     nodes: {
       shape: 'dot',
       size: 12,
@@ -290,14 +274,6 @@ function initGraph() {
   network.on('stabilizationIterationsDone', () => {
     network.setOptions({ physics: { enabled: false } });
   });
-
-  // Watch the PARENT for size changes (not the canvas itself) and
-  // propagate with a 60ms debounce. This avoids the feedback loop.
-  let _resizeTimer;
-  new ResizeObserver(() => {
-    clearTimeout(_resizeTimer);
-    _resizeTimer = setTimeout(syncSize, 60);
-  }).observe(parent);
 }
 
 // Stable hash for a node — used to skip no-op updates
