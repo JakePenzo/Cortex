@@ -80,18 +80,62 @@ test.describe("3D graph", () => {
     expect(cortexErrors, `3D graph errors: ${cortexErrors.join(", ")}`).toHaveLength(0);
   });
 
-  test("ForceGraph3D global is set after CDN load", async ({ page }) => {
+  test("ForceGraph3D and THREE globals are set after CDN load", async ({ page }) => {
     await page.goto("/");
     await waitForGraph2D(page);
     await page.waitForTimeout(1_000);
 
     await page.locator("#btn-3d").click();
 
-    // Wait for CDN canvas to appear, then inspect the global
+    // Wait for CDN canvas to appear, then inspect the globals
     await page.waitForSelector("#graph-3d canvas", { timeout: 30_000 });
 
-    const globalExists = await page.evaluate(() => typeof (window as any).ForceGraph3D === "function");
-    expect(globalExists).toBe(true);
+    const globals = await page.evaluate(() => ({
+      ForceGraph3D: typeof (window as any).ForceGraph3D === "function",
+      THREE:        typeof (window as any).THREE === "object",
+    }));
+    expect(globals.ForceGraph3D).toBe(true);
+    expect(globals.THREE).toBe(true);
+  });
+
+  test("native nav info overlay is suppressed (no duplicate hint)", async ({ page }) => {
+    await page.goto("/");
+    await waitForGraph2D(page);
+    await page.waitForTimeout(1_000);
+
+    await page.locator("#btn-3d").click();
+    await page.waitForSelector("#graph-3d canvas", { timeout: 30_000 });
+    await page.waitForTimeout(500);
+
+    // The library's built-in hint element (inside #graph-3d) should not be visible
+    // showNavInfo(false) removes or hides it — either way it must not be user-visible
+    const nativeHint = page.locator("#graph-3d").locator("text=Left-click: rotate").first();
+    await expect(nativeHint).toBeHidden();
+
+    // Our custom hint banner should still be present
+    const ourHint = page.locator("#graph-hint");
+    await expect(ourHint).toBeVisible();
+    await expect(ourHint).toContainText("Drag to rotate");
+  });
+
+  test("cluster halos are painted after physics settle", async ({ page }) => {
+    test.setTimeout(90_000); // CDN load + warmup + 8s fallback timer
+    await page.goto("/");
+    await waitForGraph2D(page);
+    await page.waitForTimeout(1_000);
+
+    await page.locator("#btn-3d").click();
+    await page.waitForSelector("#graph-3d canvas", { timeout: 30_000 });
+
+    // add3DHalos() sets window.__halosAdded = <cluster count> in onEngineStop
+    // WebKit runs the physics engine slower — allow up to 45s
+    await page.waitForFunction(
+      () => typeof (window as any).__halosAdded === "number" && (window as any).__halosAdded > 0,
+      { timeout: 45_000, polling: 500 }
+    );
+
+    const haloTypes = await page.evaluate(() => (window as any).__halosAdded as number);
+    expect(haloTypes).toBeGreaterThan(0);
   });
 
   test("graph-3d container has nonzero offsetWidth when init runs", async ({ page }) => {
@@ -158,8 +202,9 @@ test.describe("3D graph graceful CDN failure", () => {
   test.setTimeout(30_000);
 
   test("shows error fallback when CDN is blocked", async ({ page }) => {
-    // Block only the 3d-force-graph CDN script (vis.js is on the same CDN — don't block it)
+    // Block the 3D libs but leave vis.js alone (vis.js is also on jsdelivr)
     await page.route("**/3d-force-graph**", route => route.abort());
+    await page.route("**/npm/three@**", route => route.abort());
 
     await page.goto("/");
     await waitForGraph2D(page);

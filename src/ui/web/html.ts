@@ -831,22 +831,88 @@ function renderBackends(backends) {
 }
 
 // ── 3D graph ─────────────────────────────────────────────────
-function load3DLib() {
+function loadScript(src) {
   return new Promise((resolve, reject) => {
-    if (typeof ForceGraph3D !== 'undefined') { resolve(); return; }
     const s = document.createElement('script');
-    // jsdelivr is more reliable than unpkg for production traffic
-    s.src = 'https://cdn.jsdelivr.net/npm/3d-force-graph@1.80.0/dist/3d-force-graph.min.js';
-    s.onload = () => {
-      if (typeof ForceGraph3D === 'undefined') {
-        reject(new Error('3d-force-graph loaded but ForceGraph3D global not found'));
-      } else {
-        resolve();
-      }
-    };
-    s.onerror = () => reject(new Error('Script failed to load from CDN'));
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('Failed to load: ' + src));
     document.head.appendChild(s);
   });
+}
+
+function load3DLib() {
+  return new Promise(async (resolve, reject) => {
+    try {
+      // Load 3d-force-graph FIRST with no global THREE present.
+      // Its UMD bundle checks window.THREE and uses it if available — if we load an older
+      // THREE first the factory crashes.  Load the graph lib with its own bundled THREE,
+      // then layer our standalone THREE on top purely for halo mesh creation.
+      if (typeof ForceGraph3D === 'undefined') {
+        await loadScript('https://cdn.jsdelivr.net/npm/3d-force-graph@1.80.0/dist/3d-force-graph.min.js');
+      }
+      if (typeof ForceGraph3D === 'undefined') {
+        reject(new Error('3d-force-graph loaded but ForceGraph3D global not found')); return;
+      }
+      // Now load a standalone THREE for our halo geometry (r134 = last with three.min.js)
+      if (typeof THREE === 'undefined') {
+        await loadScript('https://cdn.jsdelivr.net/npm/three@0.134.0/build/three.min.js');
+      }
+      resolve();
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+// Build / refresh cluster-aura spheres in the Three.js scene
+function add3DHalos() {
+  if (!graph3d || typeof THREE === 'undefined') return;
+  const scene = graph3d.scene();
+
+  // Remove old halos
+  const old = scene.children.filter(c => c.userData.cortexHalo);
+  old.forEach(c => { c.geometry?.dispose(); c.material?.dispose(); scene.remove(c); });
+
+  // Group positioned nodes by type (skip superseded — they're faded anyway)
+  const nodes = graph3d.graphData().nodes.filter(n => n.x != null && n.status !== 'superseded');
+  const byType = {};
+  for (const n of nodes) { (byType[n.type] ??= []).push(n); }
+
+  for (const [type, ns] of Object.entries(byType)) {
+    if (!TYPE_COLORS[type]) continue;
+    const hex = TYPE_COLORS[type];
+
+    // Centroid
+    const cx = ns.reduce((s, n) => s + n.x, 0) / ns.length;
+    const cy = ns.reduce((s, n) => s + n.y, 0) / ns.length;
+    const cz = ns.reduce((s, n) => s + n.z, 0) / ns.length;
+
+    // Bounding radius + generous padding for the "gas cloud" feel
+    const baseR = ns.reduce((mx, n) =>
+      Math.max(mx, Math.sqrt((n.x-cx)**2 + (n.y-cy)**2 + (n.z-cz)**2)), 0);
+    const r = Math.max(baseR + 35, 40); // min 40 so single nodes still glow
+
+    const addSphere = (radius, opacity, side) => {
+      const geo = new THREE.SphereGeometry(radius, 32, 24);
+      const mat = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(hex),
+        transparent: true,
+        opacity,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        side,
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set(cx, cy, cz);
+      mesh.userData.cortexHalo = true;
+      scene.add(mesh);
+    };
+
+    addSphere(r,        0.055, THREE.BackSide);   // outer glow — seen from inside
+    addSphere(r * 0.65, 0.040, THREE.FrontSide);  // inner density — seen from outside
+  }
+  window.__halosAdded = Object.keys(byType).length; // sentinel for tests
 }
 
 async function toggle3D() {
@@ -923,13 +989,21 @@ function init3DGraph() {
     .linkOpacity(0.6)
     .linkWidth(l => l.label === 'overrides' ? 2 : 1)
     .backgroundColor('#0d1117')
+    .showNavInfo(false)        // suppress native controls hint — we show our own
     .warmupTicks(120)          // pre-run physics so nodes are spread on first frame
     .cooldownTicks(400)
-    .onEngineStop(() => { if (graph3d) graph3d.zoomToFit(600, 80); })
+    .onEngineStop(() => {
+      if (!graph3d) return;
+      graph3d.zoomToFit(600, 80);
+      add3DHalos(); // paint cluster auras once physics settle
+    })
     .onNodeClick(n => { selectMemory(n.id); showTab('detail'); })
     .onNodeHover(n => { document.body.style.cursor = n ? 'pointer' : 'default'; })
     .width(w)
     .height(h);
+
+  // Fallback: some engines (WebKit) run long or never fully stop — paint halos after 8s if not done yet
+  setTimeout(() => { if (graph3d && window.__halosAdded == null) add3DHalos(); }, 8_000);
 }
 
 function sync3DData() {
@@ -948,6 +1022,7 @@ function sync3DData() {
     .filter(e => nodeIds3d.has(e.from) && nodeIds3d.has(e.to))
     .map(e => ({ source: e.from, target: e.to, label: e.label || '' }));
   graph3d.graphData({ nodes: nodes3d, links: links3d });
+  // Halos update after physics re-settles (onEngineStop fires automatically)
 }
 
 // ── Tabs ─────────────────────────────────────────────────────
